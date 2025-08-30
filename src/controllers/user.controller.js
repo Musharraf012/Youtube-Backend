@@ -3,6 +3,7 @@ import { ApiError } from "../utils/ApiError.js"
 import { User } from "../models/user.modal.js";
 import { uploadOnCloudinary } from "../utils/cloudinary.js";
 import { ApiResponse } from "../utils/ApiResponse.js"
+import jwt from "jsonwebtoken";
 
 const generateAccessAndRefreshTokens = async (userId) => {
     try {
@@ -34,7 +35,7 @@ const registerUser = asyncHandler(async (req, res) => {
     if (existingUser) {
         throw new ApiError(409, "User already exists")
     }
-    // console.log('req.files',req.files);
+    // console.log('req', req);
 
     const avatarLocalPath = req.files?.avatar[0]?.path;
     let coverImageLocalPath;
@@ -72,14 +73,16 @@ const registerUser = asyncHandler(async (req, res) => {
 
 const loginUser = asyncHandler(async (req, res) => {
     const { email, username, password } = req.body
-    if (!username || !email) {
-        throw new ApiError(400, "Username or Email is required to login")
+
+    if (!email && !username) {
+        throw new ApiError(400, "Username or Email is required to login");
     }
 
-    const user = await User.findOne({
-        $or: [{ email }, { username: username.toLowerCase() }]
-    })
+    const query = email
+        ? { email }
+        : { username: username.toLowerCase() };
 
+    const user = await User.findOne(query);
     if (!user) {
         throw new ApiError(404, "User not found")
     }
@@ -99,8 +102,9 @@ const loginUser = asyncHandler(async (req, res) => {
     return res
         .status(200)
         .cookie("refreshToken", refreshToken, options)
-        .cookie("accessToken", accessToken, options
-            .json(new ApiResponse(200, { user: loggedInUser, accessToken, refreshToken }, "User logged in successfully"))
+        .cookie("accessToken", accessToken, options)
+        .json(
+            (new ApiResponse(200, { user: loggedInUser, accessToken, refreshToken }, "User logged in successfully"))
         )
 }
 )
@@ -129,4 +133,37 @@ const logoutUser = asyncHandler(async (req, res) => {
 }
 )
 
-export { registerUser, loginUser, logoutUser };
+const refreshAccessToken = asyncHandler(async (req, res) => {
+    const incomingRefreshToken = req.cookies.refreshToken || req.body.refreshToken
+    if (!incomingRefreshToken) {
+        throw new ApiError(401, "unauthorized! No token provided")
+    }
+
+    try {
+        const decodedToken = jwt.verify(incomingRefreshToken, process.env.REFRESH_TOKEN_SECRET)
+
+        const user = await User.findById(decodedToken?._id)
+        if (!user || user?.refreshToken !== incomingRefreshToken) {
+            throw new ApiError(401, "Invalid refresh token")
+        }
+
+        const options = {
+            httpOnly: true,
+            secure: true,
+        }
+
+        const { accessToken, newRefreshToken } = await generateAccessAndRefreshTokens(user._id)
+
+        return res
+            .status(200)
+            .cookie("refreshToken", newRefreshToken, options)
+            .cookie("accessToken", accessToken, options)
+            .json(
+                (new ApiResponse(200, { accessToken, newRefreshToken }, "Access token refreshed successfully"))
+            )
+    } catch (error) {
+        throw new ApiError(401, error.message || "Unauthorized! Invalid token")
+    }
+})
+
+export { registerUser, loginUser, logoutUser, refreshAccessToken };
