@@ -5,6 +5,7 @@ import { uploadOnCloudinary } from "../utils/cloudinary.js";
 import { ApiResponse } from "../utils/ApiResponse.js"
 import jwt from "jsonwebtoken";
 import { deleteLocalFile } from "../utils/deleteLocalFile.js";
+import mongoose from "mongoose";
 
 const generateAccessAndRefreshTokens = async (userId) => {
     try {
@@ -12,6 +13,8 @@ const generateAccessAndRefreshTokens = async (userId) => {
         if (!user) throw new ApiError(404, "User not found")
         const accessToken = user.generateAccessToken();
         const refreshToken = user.generateRefreshToken();
+        console.log('refreshToken', refreshToken);
+
         user.refreshToken = refreshToken;
         await user.save({ validateBeforeSave: false });
         return { accessToken, refreshToken };
@@ -113,8 +116,8 @@ const loginUser = asyncHandler(async (req, res) => {
 const logoutUser = asyncHandler(async (req, res) => {
 
     await User.findByIdAndUpdate(req.user._id, {
-        $set: {
-            refreshToken: undefined
+        $unset: {
+            refreshToken: 1
         }
     },
         {
@@ -153,14 +156,16 @@ const refreshAccessToken = asyncHandler(async (req, res) => {
             secure: true,
         }
 
-        const { accessToken, newRefreshToken } = await generateAccessAndRefreshTokens(user._id)
+        const { accessToken, refreshToken } = await generateAccessAndRefreshTokens(user._id)
+
+        console.log('newRefreshToken', refreshToken);
 
         return res
             .status(200)
-            .cookie("refreshToken", newRefreshToken, options)
+            .cookie("refreshToken", refreshToken, options)
             .cookie("accessToken", accessToken, options)
             .json(
-                (new ApiResponse(200, { accessToken, newRefreshToken }, "Access token refreshed successfully"))
+                (new ApiResponse(200, { accessToken, refreshToken }, "Access token refreshed successfully"))
             )
     } catch (error) {
         throw new ApiError(401, error.message || "Unauthorized! Invalid token")
@@ -169,8 +174,10 @@ const refreshAccessToken = asyncHandler(async (req, res) => {
 
 const changeCurrentPassword = asyncHandler(async (req, res) => {
     const { oldPassword, newPassword } = req.body
+    console.log('oldPassword, newPassword', oldPassword, newPassword);
 
-    if ([oldPassword, newPassword].some((field) => field?.trim() === "")) {
+
+    if (!oldPassword && !newPassword) {
         throw new ApiError(400, "All fields are required")
     }
 
@@ -201,10 +208,10 @@ const getCUrrentUser = asyncHandler(async (req, res) => {
 
 const updateAccountDetails = asyncHandler(async (req, res) => {
     const { fullname, email } = req.body;
-    if (!fullname || !email) {
+    if (!(fullname || email)) {
         throw new ApiError(400, "fullname and email are required")
     }
-    const user = User.findByIdAndUpdate(req.user._id,
+    const user = await User.findByIdAndUpdate(req.user._id,
         {
             $set: {
                 fullname,
@@ -319,9 +326,10 @@ const getUserChannelProfile = asyncHandler(async (req, res) => {
                     $cond: {
                         if: {
                             $in: [req.user?._id, "$subscribers.subscriber"],
-                            then: true,
-                            else: false
-                        }
+
+                        },
+                        then: true,
+                        else: false
                     }
                 }
 
@@ -356,7 +364,6 @@ const getWatchHistory = asyncHandler(async (req, res) => {
                 $match: {
                     _id: new mongoose.Types.ObjectId(req.user._id)
                 }
-
             },
             {
                 $lookup: {
